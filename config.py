@@ -9,6 +9,9 @@ TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 
 # Validate token
 if not TOKEN:
-    raise ValueError("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
+    print("❌ TELEGRAM_BOT_TOKEN not found!")
+    print("Loading token from .env file...")
+    import sys
+    sys.exit(1)
 
-print(f"✅ Bot token loaded successfully")
+print(f"✅ Token loaded: {TOKEN[:20]}...")
