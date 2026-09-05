@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from flask import Flask, request
-import asyncio
+import json
 
 # Load environment variables
 load_dotenv()
@@ -19,121 +19,106 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask app for webhook
+# Flask app
 app = Flask(__name__)
-
-# Global application variable
 application = None
 
-# Start command handler
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
+    """Start the bot."""
     user = update.effective_user
     await update.message.reply_html(
         f"Hi {user.mention_html()}! 🧮\n\n"
-        "I'm a calculator bot. Send me math expressions and I'll solve them!\n\n"
-        "Examples:\n"
-        "• 2 + 2\n"
-        "• 10 * 5\n"
-        "• 100 / 4\n"
-        "• 2 ** 3 (power)\n\n"
-        "Use /help for more commands."
+        "I'm a calculator bot. Send me math expressions!\n\n"
+        "Examples: 2+2, 10*5, 100/4, 2**3\n\n"
+        "Use /help for commands."
     )
 
-# Help command handler
+# Help command
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /help is issued."""
-    help_text = """
-    📋 Available Commands:
-    /start - Start the bot
-    /help - Show this help message
-    
-    💡 Just send any math expression and I'll calculate it!
-    """
+    """Help command."""
+    help_text = "📋 Commands:\n/start - Start bot\n/help - This message\n\n💡 Send any math expression!"
     await update.message.reply_text(help_text)
 
-# Message handler for calculations
+# Calculate messages
 async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Calculate the expression sent by the user."""
+    """Calculate math expression."""
     try:
-        expression = update.message.text.strip()
+        expr = update.message.text.strip()
+        allowed = set('0123456789+-*/.() ')
         
-        # Simple validation - only allow numbers and basic operators
-        allowed_chars = set('0123456789+-*/.() ')
-        if not all(c in allowed_chars for c in expression):
-            await update.message.reply_text("❌ Invalid characters. Use only: 0-9, +, -, *, /, (), .")
+        if not all(c in allowed for c in expr):
+            await update.message.reply_text("❌ Invalid! Use: 0-9, +, -, *, /, (), .")
             return
         
-        # Evaluate the expression
-        result = eval(expression)
-        await update.message.reply_text(f"✅ {expression} = {result}")
-    
+        result = eval(expr)
+        await update.message.reply_text(f"✅ {expr} = {result}")
     except ZeroDivisionError:
-        await update.message.reply_text("❌ Error: Division by zero!")
+        await update.message.reply_text("❌ Division by zero!")
     except SyntaxError:
-        await update.message.reply_text("❌ Error: Invalid expression syntax!")
+        await update.message.reply_text("❌ Invalid syntax!")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Webhook route for Telegram updates
+# Webhook endpoint
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    """Handle incoming Telegram updates via webhook."""
+def webhook_handler():
+    """Handle webhook updates."""
     try:
-        json_data = request.get_json(force=True)
-        update = Update.de_json(json_data, application.bot)
-        await application.process_update(update)
+        data = request.get_json(force=True)
+        update = Update.de_json(data, application.bot)
+        
+        # Process update
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(application.process_update(update))
+        loop.close()
+        
         return 'ok', 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
         return 'error', 500
 
-# Health check endpoint
+# Health check
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint for Render."""
     return 'OK', 200
 
-# Root endpoint
 @app.route('/', methods=['GET'])
 def root():
-    """Root endpoint."""
-    return 'Telegram Calculator Bot is running!', 200
+    return 'Bot Running!', 200
 
-async def main():
-    """Start the bot."""
+# Setup
+def setup_bot():
+    """Initialize bot."""
     global application
     
-    # Create application
     application = Application.builder().token(TOKEN).build()
-
-    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, calculate))
+    
+    logger.info("✅ Bot initialized")
 
-    logger.info("✅ Bot handlers registered")
+# Main
+if __name__ == '__main__':
+    if not TOKEN or not WEBHOOK_URL:
+        logger.error("❌ Missing TOKEN or WEBHOOK_URL")
+        exit(1)
+    
+    setup_bot()
     
     # Set webhook
+    import asyncio
+    async def set_webhook():
+        await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+        logger.info(f"✅ Webhook set: {WEBHOOK_URL}/webhook")
+    
     try:
-        webhook_url = f"{WEBHOOK_URL}/webhook"
-        await application.bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook set to {webhook_url}")
+        asyncio.run(set_webhook())
     except Exception as e:
-        logger.error(f"❌ Webhook setup error: {e}")
-
-# Main entry point
-if __name__ == '__main__':
-    if not TOKEN:
-        logger.error("❌ TELEGRAM_BOT_TOKEN not found in environment variables")
-        exit(1)
+        logger.error(f"Webhook error: {e}")
     
-    if not WEBHOOK_URL:
-        logger.error("❌ WEBHOOK_URL not found in environment variables")
-        exit(1)
-    
-    # Setup bot
-    asyncio.run(main())
-    
-    logger.info(f"🤖 Bot server starting on port {PORT}...")
-    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
+    logger.info(f"🤖 Starting on port {PORT}...")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
