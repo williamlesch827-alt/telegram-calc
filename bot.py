@@ -4,13 +4,14 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from flask import Flask, request
-import threading
 import asyncio
+from threading import Thread
 
 # Load environment variables
 load_dotenv()
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://your-app-name.onrender.com')
+PORT = int(os.getenv('PORT', 10000))
 
 # Configure logging
 logging.basicConfig(
@@ -24,6 +25,7 @@ app = Flask(__name__)
 
 # Global application variable
 application = None
+loop = None
 
 # Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -75,13 +77,19 @@ async def calculate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-# Webhook route for Telegram updates
+# Webhook route for Telegram updates (NOT async)
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     """Handle incoming Telegram updates via webhook."""
     try:
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.process_update(update)
+        json_data = request.get_json(force=True)
+        update = Update.de_json(json_data, application.bot)
+        
+        # Process update in event loop
+        asyncio.run_coroutine_threadsafe(
+            application.process_update(update), 
+            loop
+        )
         return 'ok', 200
     except Exception as e:
         logger.error(f"Webhook error: {e}")
@@ -93,12 +101,19 @@ def health():
     """Health check endpoint for Render."""
     return 'OK', 200
 
+# Root endpoint
+@app.route('/', methods=['GET'])
+def root():
+    """Root endpoint."""
+    return 'Telegram Calculator Bot is running!', 200
+
 # Setup webhook
 async def setup_webhook():
     """Set up webhook for Telegram bot."""
     try:
-        await application.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-        logger.info(f"✅ Webhook set to {WEBHOOK_URL}/webhook")
+        webhook_url = f"{WEBHOOK_URL}/webhook"
+        await application.bot.set_webhook(webhook_url)
+        logger.info(f"✅ Webhook set to {webhook_url}")
     except Exception as e:
         logger.error(f"❌ Webhook setup error: {e}")
 
@@ -116,20 +131,30 @@ def init_bot():
     logger.info("✅ Bot handlers registered")
     return application
 
+# Run async loop in separate thread
+def run_async_loop(loop_param):
+    """Run the async event loop in a separate thread."""
+    asyncio.set_event_loop(loop_param)
+    loop_param.run_forever()
+
 # Main entry point
 if __name__ == '__main__':
     if not TOKEN:
-        print("❌ Error: TELEGRAM_BOT_TOKEN not found in environment variables")
+        logger.error("❌ TELEGRAM_BOT_TOKEN not found in environment variables")
         exit(1)
+    
+    # Create event loop
+    loop = asyncio.new_event_loop()
     
     # Initialize bot
     init_bot()
     
     # Setup webhook
-    asyncio.run(setup_webhook())
+    asyncio.run_coroutine_threadsafe(setup_webhook(), loop)
     
-    # Get port from environment or default to 5000
-    port = int(os.getenv('PORT', 5000))
+    # Start event loop in background thread
+    loop_thread = Thread(target=run_async_loop, args=(loop,), daemon=True)
+    loop_thread.start()
     
-    logger.info(f"🤖 Bot server starting on port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info(f"🤖 Bot server starting on port {PORT}...")
+    app.run(host='0.0.0.0', port=PORT, debug=False, threaded=True)
